@@ -101,3 +101,4 @@ logs/
 # Documentation build
 docs/_build/
 docs/.doctrees/
+local.properties
