@@ -29,6 +29,21 @@ Python-based robot control system with computer vision tracking.
 
 ## Installation
 
+### For Laptop Testing (Linux/Mac)
+
+```bash
+# Install system dependencies
+sudo apt install -y python3-opencv python3-numpy  # Ubuntu/Debian
+# or
+brew install opencv python-numpy  # Mac
+
+# Optional: Install YOLO for advanced object detection
+pip3 install ultralytics --user
+# or use --break-system-packages if needed
+```
+
+### For Raspberry Pi Deployment
+
 ```bash
 # Update system
 sudo apt update && sudo apt upgrade -y
@@ -37,14 +52,14 @@ sudo apt update && sudo apt upgrade -y
 sudo apt install -y python3-pip python3-opencv python3-numpy \
     python3-picamera2 libatlas-base-dev
 
-# Install Python packages
-pip3 install flask flask-cors websockets asyncio RPi.GPIO pigpio
+# Install Python packages (use --break-system-packages if needed)
+pip3 install flask flask-cors websockets asyncio RPi.GPIO ultralytics --break-system-packages
 
 # Enable camera
 sudo raspi-config
 # Interface Options → Camera → Enable
 
-# Enable hardware PWM
+# Enable hardware PWM (for GPIO control)
 sudo pigpiod
 ```
 
@@ -52,19 +67,21 @@ sudo pigpiod
 
 ```
 raspberry-pi/
-├── main.py                 # Main entry point
-├── config.py              # Configuration and pin definitions
-├── requirements.txt       # Python dependencies
-├── tracking/
+├── main.py                 # Main robot controller entry point
+├── test_vision.py          # Vision system testing script
+├── requirements.txt        # Python dependencies
+├── vision/                 # Unified vision system (NEW)
 │   ├── __init__.py
-│   ├── color_tracker.py   # OpenCV color tracking
-│   └── qr_tracker.py      # QR code tracking (optional)
+│   ├── config.py           # Vision configuration & HSV ranges
+│   ├── camera_controller.py # Main dual-mode coordinator
+│   ├── person_tracker.py   # Color-based person following
+│   └── object_detector.py  # YOLO + color grocery detection
 ├── motors/
 │   ├── __init__.py
-│   └── motor_controller.py # Motor control via pigpio
+│   └── motor_controller.py # L298N motor control with GPIO mock
 ├── sensors/
 │   ├── __init__.py
-│   └── ultrasonic.py      # Distance sensor
+│   └── ultrasonic.py       # Distance sensor
 └── server/
     ├── __init__.py
     └── websocket_server.py # WebSocket communication
@@ -81,22 +98,77 @@ Edit `config.py` to customize:
 
 ## Running
 
-```bash
-# Start pigpio daemon (required for PWM)
-sudo pigpiod
+### Testing Vision System Only (Laptop or Pi)
 
-# Run the robot
-python3 main.py
+```bash
+# Test the unified vision system with webcam
+cd raspberry-pi
+python3 test_vision.py
+
+# Controls:
+# M - Toggle mode (FOLLOW ↔ SCAN)
+# C - Calibrate person marker (hold pink/magenta object in center)
+# Q - Quit
 ```
 
-The WebSocket server will start on port 8765.
+### Running Full Robot Controller
+
+```bash
+# On Laptop (for testing, motors will be mocked)
+cd raspberry-pi
+python3 main.py
+
+# On Raspberry Pi (with real motors)
+sudo pigpiod  # Start GPIO daemon first
+python3 main.py
+
+# For headless operation (no display)
+python3 main.py --headless
+
+# Without YOLO (color detection only)
+python3 main.py --no-yolo
+
+# Controls (interactive mode):
+# T - Toggle tracking ON/OFF
+# M - Toggle mode (FOLLOW ↔ SCAN)
+# C - Calibrate person marker
+# E - Emergency stop
+# Q - Quit
+```
+
+The WebSocket server will start on port 8765 (when implemented).
+
+## Dual-Mode Vision System
+
+The robot has two operating modes:
+
+### FOLLOW Mode
+- Tracks a person using a colored marker (pink/magenta/green)
+- Maintains target distance of ~1 meter
+- Requires calibration (press 'C' key)
+- Uses HSV color detection for robust tracking
+
+### SCAN Mode
+- Detects grocery items using YOLO or color detection
+- Supports: banana, apple, orange (expandable)
+- Automatically falls back to color detection if YOLO unavailable
+- Provides object labels and confidence scores
+
+Switch modes anytime by pressing 'M' key.
 
 ## Calibration
 
-1. Start the robot
-2. Position the colored marker in front of the camera
-3. Press CALIBRATE in the Android app
-4. The robot will lock onto the marker color
+### Person Tracking (FOLLOW Mode)
+1. Start the robot in FOLLOW mode
+2. Hold colored marker (pink/magenta) in center of camera view
+3. Press 'C' to calibrate
+4. The robot will lock onto your marker color
+5. Press 'T' to enable tracking
+
+### Object Detection (SCAN Mode)
+- No calibration needed
+- Show banana/apple/orange to camera
+- System automatically detects with YOLO or color matching
 
 ## Color Marker Setup
 

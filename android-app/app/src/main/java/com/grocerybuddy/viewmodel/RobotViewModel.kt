@@ -83,6 +83,10 @@ class RobotViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setMode(mode: RobotWebSocket.CameraMode) {
+        robotWebSocket.setMode(mode)
+    }
+
     // Grocery List Functions
     fun addGroceryItem(name: String) {
         viewModelScope.launch {

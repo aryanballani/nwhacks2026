@@ -1,42 +1,155 @@
 """
-Motor control using pigpio for smooth PWM control
-Controls differential drive robot base
+Motor control using RPi.GPIO for PWM control
+Controls differential drive robot base via L298N motor driver
 """
 
-# TODO: Implement MotorController class
-# See claude.md for complete implementation code
+import sys
+
+# Try to import GPIO, fallback to mock for testing on laptop
+try:
+    import RPi.GPIO as GPIO
+    GPIO_AVAILABLE = True
+except (ImportError, RuntimeError):
+    print("⚠ RPi.GPIO not available - using mock mode for testing")
+    GPIO_AVAILABLE = False
+
+    # Mock GPIO for laptop testing
+    class MockGPIO:
+        BCM = "BCM"
+        OUT = "OUT"
+        HIGH = 1
+        LOW = 0
+
+        @staticmethod
+        def setmode(mode): pass
+
+        @staticmethod
+        def setup(pin, mode): pass
+
+        @staticmethod
+        def output(pin, value): pass
+
+        @staticmethod
+        def PWM(pin, freq):
+            class MockPWM:
+                def start(self, duty): pass
+                def ChangeDutyCycle(self, duty): pass
+                def stop(self): pass
+            return MockPWM()
+
+        @staticmethod
+        def cleanup(): pass
+
+    GPIO = MockGPIO()
+
+
+# L298N Motor Driver Pin Configuration
+# Motor A (Left)
+ENA = 13  # PWM pin for left motor speed
+IN1 = 19  # Direction control 1 for left motor
+IN2 = 26  # Direction control 2 for left motor
+
+# Motor B (Right)
+ENB = 18  # PWM pin for right motor speed
+IN3 = 23  # Direction control 1 for right motor
+IN4 = 24  # Direction control 2 for right motor
+
+PWM_FREQUENCY = 1000  # 1kHz PWM frequency
+
 
 class MotorController:
     """Controls robot motors via L298N motor driver"""
 
     def __init__(self):
         """Initialize GPIO pins and PWM"""
-        pass
+        self.enabled = GPIO_AVAILABLE
 
-    def set_motors(self, left_speed, right_speed):
-        """Set motor speeds (-100 to 100)"""
-        pass
+        if not self.enabled:
+            print("✓ MotorController initialized (MOCK MODE - no GPIO)")
+            return
 
-    def forward(self, speed=100):
-        """Move forward"""
-        pass
+        # Setup GPIO
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(ENA, GPIO.OUT)
+        GPIO.setup(IN1, GPIO.OUT)
+        GPIO.setup(IN2, GPIO.OUT)
+        GPIO.setup(ENB, GPIO.OUT)
+        GPIO.setup(IN3, GPIO.OUT)
+        GPIO.setup(IN4, GPIO.OUT)
 
-    def backward(self, speed=100):
-        """Move backward"""
-        pass
+        # Initialize PWM
+        self.pwm_left = GPIO.PWM(ENA, PWM_FREQUENCY)
+        self.pwm_right = GPIO.PWM(ENB, PWM_FREQUENCY)
 
-    def turn_left(self, speed=70):
+        # Start PWM with 0% duty cycle (motors off)
+        self.pwm_left.start(0)
+        self.pwm_right.start(0)
+
+        print("✓ MotorController initialized (GPIO mode)")
+
+    def set_motors(self, left_speed: float, right_speed: float):
+        """
+        Set motor speeds with direction
+
+        Args:
+            left_speed: Speed from -100 (full reverse) to 100 (full forward)
+            right_speed: Speed from -100 (full reverse) to 100 (full forward)
+        """
+        # Clamp speeds
+        left_speed = max(-100, min(100, left_speed))
+        right_speed = max(-100, min(100, right_speed))
+
+        if not self.enabled:
+            # Mock mode - just print
+            if abs(left_speed) > 5 or abs(right_speed) > 5:
+                print(f"🤖 Motors: L={left_speed:+.0f}% R={right_speed:+.0f}%")
+            return
+
+        # Left motor
+        if left_speed >= 0:
+            GPIO.output(IN1, GPIO.HIGH)
+            GPIO.output(IN2, GPIO.LOW)
+            self.pwm_left.ChangeDutyCycle(abs(left_speed))
+        else:
+            GPIO.output(IN1, GPIO.LOW)
+            GPIO.output(IN2, GPIO.HIGH)
+            self.pwm_left.ChangeDutyCycle(abs(left_speed))
+
+        # Right motor
+        if right_speed >= 0:
+            GPIO.output(IN3, GPIO.HIGH)
+            GPIO.output(IN4, GPIO.LOW)
+            self.pwm_right.ChangeDutyCycle(abs(right_speed))
+        else:
+            GPIO.output(IN3, GPIO.LOW)
+            GPIO.output(IN4, GPIO.HIGH)
+            self.pwm_right.ChangeDutyCycle(abs(right_speed))
+
+    def forward(self, speed: float = 100):
+        """Move forward at specified speed"""
+        self.set_motors(speed, speed)
+
+    def backward(self, speed: float = 100):
+        """Move backward at specified speed"""
+        self.set_motors(-speed, -speed)
+
+    def turn_left(self, speed: float = 70):
         """Turn left in place"""
-        pass
+        self.set_motors(-speed, speed)
 
-    def turn_right(self, speed=70):
+    def turn_right(self, speed: float = 70):
         """Turn right in place"""
-        pass
+        self.set_motors(speed, -speed)
 
     def stop(self):
         """Stop all motors"""
-        pass
+        self.set_motors(0, 0)
 
     def cleanup(self):
         """Cleanup GPIO resources"""
-        pass
+        self.stop()
+        if self.enabled:
+            self.pwm_left.stop()
+            self.pwm_right.stop()
+            GPIO.cleanup()
+        print("✓ MotorController cleanup complete")

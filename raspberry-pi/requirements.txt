@@ -9,6 +9,7 @@ asyncio
 # Computer Vision
 opencv-python>=4.8.0
 numpy>=1.24.0
+ultralytics>=8.0.0  # YOLO for object detection (optional, has color fallback)
 
 # Hardware Control
 RPi.GPIO>=0.7.1
