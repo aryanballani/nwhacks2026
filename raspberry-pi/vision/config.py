@@ -71,10 +71,10 @@ YOLO_CONFIDENCE_THRESHOLD = 0.5
 YOLO_IOU_THRESHOLD = 0.45
 
 # ONNX Configuration (Ultralytics export)
-# ONNX_MODEL = "models/best.onnx"
-# ONNX_INPUT_SIZE = 416
-# ONNX_CONFIDENCE_THRESHOLD = 0.4
-# ONNX_IOU_THRESHOLD = 0.45
+ONNX_MODEL = "models/best.onnx"
+ONNX_INPUT_SIZE = 416
+ONNX_CONFIDENCE_THRESHOLD = 0.4
+ONNX_IOU_THRESHOLD = 0.45
 
 # Class names for ONNX custom model (index-aligned)
 # Example: ["banana", "apple", "orange"]
