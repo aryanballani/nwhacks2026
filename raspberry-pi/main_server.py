@@ -18,7 +18,7 @@ async def main_async():
     print()
 
     try:
-        # Initialize robot controller (headless mode for Pi)
+        # Initialize robot controller with camera and object detection
         robot = RobotController(camera_id=0, use_yolo=True)
 
         # Initialize WebSocket server
