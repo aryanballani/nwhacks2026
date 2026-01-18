@@ -85,16 +85,28 @@ class ArucoTracker:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         corners, ids = self._detect_markers(gray)
         if ids is None or len(corners) == 0:
+            print(f"⚠ Calibration failed: No ArUco marker detected")
             return False
 
         c = corners[0].reshape((4, 2))
         top_w = np.linalg.norm(c[0] - c[1])
         bot_w = np.linalg.norm(c[2] - c[3])
         px_w = (top_w + bot_w) / 2.0
+
         if px_w <= 0:
+            print(f"⚠ Calibration failed: Invalid pixel width")
             return False
 
         self.focal_length_px = (px_w * float(known_distance_cm)) / self.marker_length_cm
+
+        marker_id = int(ids[0][0]) if ids is not None else None
+        print(f"✓ Calibration successful!")
+        print(f"  Marker ID: {marker_id}")
+        print(f"  Pixel width: {px_w:.1f}px")
+        print(f"  Calibration distance: {known_distance_cm}cm")
+        print(f"  Marker size: {self.marker_length_cm}cm")
+        print(f"  Focal length: {self.focal_length_px:.1f}px")
+
         return True
 
     def estimate_distance_m(self, pixel_width_px: float) -> Optional[float]:

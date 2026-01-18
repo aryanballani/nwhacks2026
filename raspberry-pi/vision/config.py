@@ -6,13 +6,15 @@ HSV color ranges, YOLO settings, camera parameters
 import numpy as np
 
 # Camera Settings
-CAMERA_WIDTH = 640
-CAMERA_HEIGHT = 480
-CAMERA_FPS = 30
+# IMPORTANT: Optimized for Raspberry Pi 4B performance
+# Lower resolution and FPS reduce CPU load significantly
+CAMERA_WIDTH = 320  # Reduced from 416 for better tracking performance
+CAMERA_HEIGHT = 240  # Reduced from 416 for better tracking performance
+CAMERA_FPS = 15     # Reduced from 30 to lower CPU usage
 
 # ArUco Tracking
 ARUCO_MARKER_LENGTH_CM = 5.0
-ARUCO_CALIBRATION_DISTANCE_CM = 30.0
+ARUCO_CALIBRATION_DISTANCE_CM = 1.0
 
 # Person Tracking - Color-based detection
 PERSON_MARKER_COLORS = {

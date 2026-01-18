@@ -7,11 +7,30 @@ import asyncio
 import json
 import websockets
 import logging
-from typing import Set
+import numpy as np
+from typing import Set, Any
 from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def to_json_serializable(obj: Any) -> Any:
+    """
+    Convert numpy types to Python native types for JSON serialization
+    """
+    if isinstance(obj, (np.integer, np.int32, np.int64)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float32, np.float64)):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (list, tuple)):
+        return [to_json_serializable(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {key: to_json_serializable(value) for key, value in obj.items()}
+    else:
+        return obj
 
 
 class RobotWebSocketServer:
@@ -25,7 +44,7 @@ class RobotWebSocketServer:
 
         # Camera feed settings
         self.stream_video = False
-        self.video_quality = 50  # JPEG quality 0-100
+        self.video_quality = 30  # JPEG quality 0-100 (reduced from 50 for Pi performance)
 
     async def handler(self, websocket):
         """Handle client connections and messages"""
@@ -60,8 +79,30 @@ class RobotWebSocketServer:
         logger.info(f"Received command: {command}")
 
         if command == "calibrate":
-            # Calibrate person marker
-            success = self.robot.camera.calibrate_person_marker()
+            # Calibrate person marker - try multiple times
+            logger.info("📸 Starting calibration (trying up to 10 frames)...")
+            success = False
+
+            for attempt in range(10):
+                frame, result = self.robot.camera.process_frame()
+
+                if frame is not None and result.found:
+                    logger.info(f"Attempt {attempt+1}: ArUco detected, calibrating...")
+                    success = self.robot.camera.calibrate_person_marker(frame)
+
+                    if success:
+                        logger.info(f"✅ Calibration successful on attempt {attempt+1}!")
+                        break
+                    else:
+                        logger.warning(f"Attempt {attempt+1}: Calibration failed, retrying...")
+                else:
+                    logger.warning(f"Attempt {attempt+1}: No ArUco in frame")
+
+                await asyncio.sleep(0.1)  # Wait 100ms between attempts
+
+            if not success:
+                logger.error("❌ Calibration failed after 10 attempts")
+
             response = {
                 "type": "calibration_result",
                 "success": success,
@@ -74,20 +115,22 @@ class RobotWebSocketServer:
             self.robot.tracking_enabled = True
             if self.robot.emergency_stop:
                 self.robot.emergency_stop = False
-            logger.info("Tracking enabled")
+            logger.info("✅ TRACKING ENABLED - Motors will now respond to vision")
 
         elif command == "stop_tracking":
             # Disable tracking
             self.robot.tracking_enabled = False
-            self.robot.motors.stop()
-            logger.info("Tracking disabled")
+            if self.robot.motors:
+                self.robot.motors.stop()
+            logger.info("⏹️  Tracking disabled - Motors stopped")
 
         elif command == "emergency_stop":
             # Emergency stop - stop motors and disable tracking
             self.robot.emergency_stop = True
             self.robot.tracking_enabled = False
-            self.robot.motors.stop()
-            logger.warning("EMERGENCY STOP activated")
+            if self.robot.motors:
+                self.robot.motors.stop()
+            logger.warning("🚨 EMERGENCY STOP activated")
 
         elif command == "set_mode":
             # Switch between FOLLOW and SCAN modes
@@ -125,31 +168,35 @@ class RobotWebSocketServer:
             if result.mode.value == "follow" and result.found and result.center:
                 # Calculate normalized offset from center (already computed in vision result)
                 h, w = frame.shape[:2] if frame is not None else (480, 640)
-                x_offset = (result.center[0] - w / 2) / (w / 2)
-                y_offset = (result.center[1] - h / 2) / (h / 2)
+                x_offset = float((int(result.center[0]) - w / 2) / (w / 2))
+                y_offset = float((int(result.center[1]) - h / 2) / (h / 2))
 
             status = {
                 "type": "status",
-                "tracking": self.robot.tracking_enabled,
-                "emergency_stop": self.robot.emergency_stop,
-                "target_locked": result.found,
-                "distance": round(result.distance, 2) if result.found else 0.0,
-                "mode": self.robot.camera.mode.value,
+                "tracking": bool(self.robot.tracking_enabled),
+                "emergency_stop": bool(self.robot.emergency_stop),
+                "target_locked": bool(result.found),
+                "distance": float(result.distance) if result.found else 0.0,
+                "mode": str(self.robot.camera.mode.value),
                 "calibrated": self.robot.camera.aruco_tracker.focal_length_px is not None,
-                "detected_object": result.label if result.found and result.mode.value == "scan" else "",
-                "confidence": round(result.confidence, 2) if result.found else 0.0,
-                "x_offset": round(x_offset, 3),
-                "y_offset": round(y_offset, 3),
-                "tracking_offset": round(result.tracking_offset, 3),
+                "detected_object": str(result.label) if result.found and result.mode.value == "scan" else "",
+                "confidence": float(result.confidence) if result.found else 0.0,
+                "x_offset": float(x_offset),
+                "y_offset": float(y_offset),
+                "tracking_offset": float(result.tracking_offset),
                 "battery": 100,  # TODO: Implement battery monitoring
                 "obstacle_detected": False,  # TODO: Implement ultrasonic sensor
                 "timestamp": datetime.now().isoformat()
             }
 
+            # Ensure all values are JSON serializable
+            status = to_json_serializable(status)
             await websocket.send(json.dumps(status))
 
         except Exception as e:
             logger.error(f"Error sending status: {e}")
+            import traceback
+            traceback.print_exc()
 
     async def broadcast_status(self):
         """Periodically broadcast robot status to all clients"""
@@ -162,31 +209,47 @@ class RobotWebSocketServer:
                     # Get normalized x, y coordinates from the result
                     x_offset, y_offset = 0.0, 0.0
                     if result.mode.value == "follow" and result.found and result.center:
-                        # Calculate normalized offset from center (already computed in vision result)
+                        # Calculate normalized offset from center (ensure Python float)
                         h, w = frame.shape[:2] if frame is not None else (480, 640)
-                        x_offset = (result.center[0] - w / 2) / (w / 2)
-                        y_offset = (result.center[1] - h / 2) / (h / 2)
+                        x_offset = float((int(result.center[0]) - w / 2) / (w / 2))
+                        y_offset = float((int(result.center[1]) - h / 2) / (h / 2))
 
                     status = {
                         "type": "status",
-                        "tracking": self.robot.tracking_enabled,
-                        "emergency_stop": self.robot.emergency_stop,
-                        "target_locked": result.found,
-                        "distance": round(result.distance, 2) if result.found else 0.0,
-                        "mode": self.robot.camera.mode.value,
+                        "tracking": bool(self.robot.tracking_enabled),
+                        "emergency_stop": bool(self.robot.emergency_stop),
+                        "target_locked": bool(result.found),
+                        "distance": float(result.distance) if result.found else 0.0,
+                        "mode": str(self.robot.camera.mode.value),
                         "calibrated": self.robot.camera.aruco_tracker.focal_length_px is not None,
-                        "detected_object": result.label if result.found and result.mode.value == "scan" else "",
-                        "confidence": round(result.confidence, 2) if result.found else 0.0,
-                        "x_offset": round(x_offset, 3),
-                        "y_offset": round(y_offset, 3),
-                        "tracking_offset": round(result.tracking_offset, 3),
+                        "detected_object": str(result.label) if result.found and result.mode.value == "scan" else "",
+                        "confidence": float(result.confidence) if result.found else 0.0,
+                        "x_offset": float(x_offset),
+                        "y_offset": float(y_offset),
+                        "tracking_offset": float(result.tracking_offset),
                         "battery": 100,
                         "obstacle_detected": False,
                         "timestamp": datetime.now().isoformat()
                     }
 
+                    # Ensure all values are JSON serializable (convert numpy types)
+                    status = to_json_serializable(status)
+
                     # Process vision result for motor control
-                    if not self.robot.emergency_stop:
+                    if not self.robot.emergency_stop and self.robot.tracking_enabled:
+                        # Log motor control activity every 30 frames
+                        if hasattr(self, '_motor_log_counter'):
+                            self._motor_log_counter += 1
+                        else:
+                            self._motor_log_counter = 0
+
+                        if self._motor_log_counter % 30 == 0:
+                            logger.info(
+                                f"🎮 Motor Control Active: "
+                                f"Mode={result.mode.value}, Found={result.found}, "
+                                f"Distance={result.distance:.2f}m, Offset={result.tracking_offset:+.3f}"
+                            )
+
                         self.robot.process_vision_result(result)
 
                     # Broadcast to all clients
@@ -208,6 +271,8 @@ class RobotWebSocketServer:
 
                 except Exception as e:
                     logger.error(f"Error in broadcast loop: {e}")
+                    import traceback
+                    traceback.print_exc()
 
             await asyncio.sleep(0.1)  # 10Hz update rate
 

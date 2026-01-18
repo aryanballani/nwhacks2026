@@ -46,13 +46,13 @@ except (ImportError, RuntimeError):
 # L298N Motor Driver Pin Configuration
 # Motor A (Left)
 ENA = 13  # PWM pin for left motor speed
-IN1 = 19  # Direction control 1 for left motor
-IN2 = 26  # Direction control 2 for left motor
+IN1 = 17  # Direction control 1 for left motor
+IN2 = 27  # Direction control 2 for left motor
 
 # Motor B (Right)
-ENB = 18  # PWM pin for right motor speed
-IN3 = 23  # Direction control 1 for right motor
-IN4 = 24  # Direction control 2 for right motor
+ENB = 12  # PWM pin for right motor speed
+IN3 = 22  # Direction control 1 for right motor
+IN4 = 23  # Direction control 2 for right motor
 
 PWM_FREQUENCY = 1000  # 1kHz PWM frequency
 
@@ -63,6 +63,7 @@ class MotorController:
     def __init__(self):
         """Initialize GPIO pins and PWM"""
         self.enabled = GPIO_AVAILABLE
+        print("🔧 DEBUG: Initializing MotorController...", flush=True)
 
         if not self.enabled:
             print("✓ MotorController initialized (MOCK MODE - no GPIO)")
@@ -110,6 +111,10 @@ class MotorController:
                 print(f"🤖 Motors: L={left_speed:+.0f}% R={right_speed:+.0f}%")
             return
 
+        # Debug: Print motor commands in GPIO mode too
+        if abs(left_speed) > 5 or abs(right_speed) > 5:
+            print(f"🎮 GPIO Motors: L={left_speed:+.0f}% R={right_speed:+.0f}%", flush=True)
+
         # Left motor
         if left_speed >= 0:
             GPIO.output(IN1, GPIO.HIGH)
@@ -132,6 +137,7 @@ class MotorController:
 
     def forward(self, speed: float = 100):
         """Move forward at specified speed"""
+        print("Forward called")
         self.set_motors(speed, speed)
 
     def backward(self, speed: float = 100):

@@ -7,10 +7,15 @@ Autonomous shopping cart robot with person-following and object scanning
 import cv2
 import time
 import sys
+import logging
 from typing import Optional
 
 from vision import CameraController, CameraMode, VisionResult
 from motors.motor_controller import MotorController
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class RobotController:
@@ -30,8 +35,17 @@ class RobotController:
         print()
 
         # Initialize subsystems
+        logger.info("Initializing camera controller...")
         self.camera = CameraController(camera_id=camera_id, use_yolo=use_yolo)
-        self.motors = MotorController()
+
+        logger.info("Initializing motor controller...")
+        try:
+            self.motors = MotorController()
+            logger.info("✅ Motors initialized successfully")
+        except Exception as e:
+            logger.error(f"❌ Motor initialization failed: {e}")
+            logger.warning("⚠️  Running in CAMERA-ONLY mode (no motors)")
+            self.motors = None
 
         # Control parameters
         self.target_distance = 1.0  # Target following distance in meters
@@ -40,11 +54,11 @@ class RobotController:
         # Speed control
         self.base_speed = 50  # Base motor speed (0-100)
         self.max_speed = 80   # Maximum motor speed
-        self.turn_gain = 60   # Steering sensitivity (higher = sharper turns)
+        self.turn_gain = 80   # Steering sensitivity (higher = sharper turns)
 
         # Safety
         self.min_distance = 0.4  # Minimum safe distance (meters)
-        self.max_tracking_age = 2.0  # Max time without detection before stopping
+        self.max_tracking_age = 1.0  # Max time without detection before stopping
 
         # State
         self.tracking_enabled = False
@@ -54,6 +68,7 @@ class RobotController:
         print("✅ RobotController initialized")
         print(f"📷 Camera mode: {self.camera.mode.value.upper()}")
         print(f"🎯 Target distance: {self.target_distance}m")
+        print(f"🎮 Motors: {'ENABLED' if self.motors else 'DISABLED'}")
         print()
 
     def calculate_motor_speeds(self, result: VisionResult) -> tuple[float, float]:
@@ -69,37 +84,103 @@ class RobotController:
         if not result.found or self.emergency_stop:
             return (0.0, 0.0)
 
-        # Distance-based speed control
+        # Check if calibrated
+        is_calibrated = self.camera.aruco_tracker.focal_length_px is not None
+
+        # Log every 30 frames to avoid spam
+        frame_count = getattr(self, '_motor_log_count', 0)
+        should_log = frame_count % 30 == 0
+        self._motor_log_count = frame_count + 1
+
+        # If NOT calibrated, just track by rotation (no forward/backward)
+        if not is_calibrated:
+            if should_log:
+                logger.warning("⚠️  NOT CALIBRATED - Tracking by rotation only")
+                logger.info(f"Offset={result.tracking_offset:+.3f}")
+
+            if result.found:
+                # Just rotate to center the marker
+                turn_amount = result.tracking_offset * self.turn_gain * 3  # Gentler turns when not calibrated
+
+                left_speed = abs(turn_amount)
+                right_speed = abs(turn_amount)
+
+                # Clamp to motor limits
+                left_speed = max(-100, min(100, left_speed))  # Lower max speed when not calibrated
+                right_speed = max(-100, min(100, right_speed))
+
+                if result.tracking_offset < 0: # left
+                    print(f"turning left: {left_speed}", flush=True)
+                    self.motors.set_motors(left_speed, right_speed)
+                    time.sleep(0.5)
+                else:  # right
+                    self.motors.set_motors(left_speed-5, right_speed)
+                    time.sleep(0.5)
+            
+                if should_log:
+                    direction = "LEFT ⬅️ " if result.tracking_offset < 0 else "RIGHT ➡️"
+                    logger.info(f"🔄 Turning {direction} to center marker")
+                    logger.info(f"🎮 Motor Speeds: L={left_speed:+.0f}, R={right_speed:+.0f}")
+                    print("mottrorrrrrrrr", flush=True)
+                    print("motor should move formwr52582828282", flush=True)
+
+
+                return (left_speed*3, right_speed*3)
+            else:
+                self.motors.stop()
+
+        # CALIBRATED - Use distance-based control
         distance_error = result.distance - self.target_distance
 
-        # Forward/backward speed
+        if should_log:
+            logger.info(
+                f"Motor Control: Distance={result.distance:.2f}m "
+                f"(target={self.target_distance:.2f}m, error={distance_error:+.2f}m), "
+                f"Offset={result.tracking_offset:+.3f}"
+            )
+
+        # Forward/backward speed based on distance
         if abs(distance_error) < self.distance_tolerance:
             # Within tolerance - maintain position
             forward_speed = 0
+            if should_log:
+                logger.info("✓ Distance OK - Maintaining position")
         elif distance_error > 0:
             # Too far - move forward
+            print(f"distance error: {distance_error}",  flush=True)
+            print(f"target distance: {self.target_distance}", flush=True)
             forward_speed = min(self.base_speed * (distance_error / self.target_distance), self.max_speed)
+            print(f"forward speed: {forward_speed}", flush=True)
+            if should_log:
+                logger.info(f"⬆️  Moving FORWARD {forward_speed:.0f} - Target too far")
         else:
             # Too close - move backward (or stop if very close)
             if result.distance < self.min_distance:
                 forward_speed = 0
-                self.motors.stop()
-                return (0.0, 0.0)
+                if should_log:
+                    logger.warning(f"⚠️  TOO CLOSE! Distance {result.distance:.2f}m < {self.min_distance:.2f}m - STOPPING")
             else:
                 forward_speed = max(-self.base_speed * 0.5, -30)  # Limited reverse speed
+                if should_log:
+                    logger.info(f"⬇️  Moving BACKWARD {abs(forward_speed):.0f} - Target too close")
 
-        # Steering based on tracking offset (-1 to 1)
-        # Negative offset = target on left, need to turn left
-        # Positive offset = target on right, need to turn right
+        # Steering based on tracking offset
         turn_amount = result.tracking_offset * self.turn_gain
 
-        # Differential drive: adjust left/right speeds for steering
+        if should_log and abs(result.tracking_offset) > 0.05:
+            direction = "LEFT ⬅️ " if result.tracking_offset < 0 else "RIGHT ➡️"
+            logger.info(f"🔄 Turning {direction} (offset: {result.tracking_offset:+.3f}, turn: {turn_amount:+.0f})")
+
+        # Differential drive
         left_speed = forward_speed - turn_amount
         right_speed = forward_speed + turn_amount
 
         # Clamp to motor limits
         left_speed = max(-100, min(100, left_speed))
         right_speed = max(-100, min(100, right_speed))
+
+        if should_log:
+            logger.info(f"🎮 Motor Speeds: L={left_speed:+.0f}, R={right_speed:+.0f}")
 
         return (left_speed, right_speed)
 
@@ -110,13 +191,19 @@ class RobotController:
         Args:
             result: Current vision detection result
         """
+        # Skip if motors not available
+        if self.motors is None:
+            return
+
         if result.found:
             self.last_detection_time = time.time()
 
             if self.tracking_enabled:
                 # Calculate and apply motor speeds
-                left_speed, right_speed = self.calculate_motor_speeds(result)
-                self.motors.set_motors(left_speed, right_speed)
+                self.calculate_motor_speeds(result)
+                print("turning the motors!!!", flush=True)
+                #self.motors.set_motors(left_speed, right_speed)
+                #time.sleep(0.5)  # Delay to allow motors to respond
         else:
             # No detection
             time_since_detection = time.time() - self.last_detection_time
@@ -124,6 +211,7 @@ class RobotController:
             if time_since_detection > self.max_tracking_age:
                 # Lost target - stop motors
                 self.motors.stop()
+                time.sleep(0.5)  # Delay to ensure motors stop
 
     def run_headless(self):
         """
@@ -305,8 +393,10 @@ class RobotController:
     def shutdown(self):
         """Clean shutdown of all subsystems"""
         print("\n\n🛑 Shutting down...")
-        self.motors.stop()
-        self.motors.cleanup()
+        if self.motors:
+            self.motors.stop()
+            self.motors.cleanup()
+            print("✅ Motors stopped and cleaned up")
         self.camera.release()
         print("✅ Shutdown complete")
         print("\nGoodbye! 👋\n")

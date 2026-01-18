@@ -5,13 +5,21 @@ Switches between FOLLOW mode (person tracking) and SCAN mode (object detection)
 
 import cv2
 import numpy as np
+import logging
+import time
+import threading
 from enum import Enum
 from typing import Optional, Tuple, Union
 from dataclasses import dataclass
+from queue import Queue
 
 from .aruco_tracker import ArucoTracker, ArucoDetection
 from .object_detector import ObjectDetector, ObjectDetection
 from .config import CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FPS
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class CameraMode(Enum):
@@ -40,16 +48,18 @@ class CameraController:
     Manages camera, person tracking, and object detection
     """
 
-    def __init__(self, camera_id: int = 0, use_yolo: bool = True):
+    def __init__(self, camera_id: int = 0, use_yolo: bool = True, threaded: bool = True):
         """
         Initialize camera controller
 
         Args:
             camera_id: Camera device ID (0 for laptop webcam, 0 for Pi)
             use_yolo: Use YOLO for object detection (fallback to color if unavailable)
+            threaded: Use threaded camera capture for better performance
         """
         self.camera_id = camera_id
         self.mode = CameraMode.SCAN  # Default mode
+        self.threaded = threaded
 
         # Initialize camera
         self.cap = cv2.VideoCapture(camera_id)
@@ -57,20 +67,46 @@ class CameraController:
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
         self.cap.set(cv2.CAP_PROP_FPS, CAMERA_FPS)
 
+        # Enable camera optimizations for Raspberry Pi
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce buffer to minimize lag
+
         if not self.cap.isOpened():
             raise RuntimeError(f"Failed to open camera {camera_id}")
 
         # Initialize vision modules
         self.aruco_tracker = ArucoTracker()
         self.object_detector = ObjectDetector(use_yolo=use_yolo)
-        
+
         # Performance optimization - frame skipping
         self._frame_count = 0
-        self._skip_frames_scan = 1  # Process every frame in SCAN mode (YOLO is optimized)
+        self._skip_frames_scan = 2  # Process every 3rd frame in SCAN mode (reduce CPU load)
         self._skip_frames_follow = 0  # No skipping in FOLLOW mode (ArUco is fast)
         self._last_result = None  # Cache last result for skipped frames
 
-        print(f"✓ CameraController initialized (Camera ID: {camera_id}, Mode: {self.mode.value})")
+        # Threading setup
+        if self.threaded:
+            self._frame_queue = Queue(maxsize=2)  # Small queue to avoid lag
+            self._result_queue = Queue(maxsize=2)
+            self._stop_event = threading.Event()
+
+            # Start capture thread
+            self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
+            self._capture_thread.start()
+
+            # Start processing thread
+            self._processing_thread = threading.Thread(target=self._processing_loop, daemon=True)
+            self._processing_thread.start()
+
+            logger.info("✓ Threaded camera capture enabled")
+
+        # Performance monitoring
+        self._timing_stats = {
+            "capture_ms": [],
+            "process_ms": [],
+            "annotate_ms": []
+        }
+
+        print(f"✓ CameraController initialized (Camera ID: {camera_id}, Mode: {self.mode.value}, Threaded: {threaded})")
 
     def set_mode(self, mode: CameraMode):
         """Switch between FOLLOW and SCAN modes"""
@@ -93,6 +129,84 @@ class CameraController:
                 return False
 
         return self.aruco_tracker.calibrate(frame)
+
+    def _capture_loop(self):
+        """Background thread for continuous camera capture"""
+        logger.info("Camera capture thread started")
+        while not self._stop_event.is_set():
+            t_start = time.time()
+            ret, frame = self.cap.read()
+            capture_time = (time.time() - t_start) * 1000
+
+            if ret:
+                # Drop old frames if queue is full (keep only latest)
+                if self._frame_queue.full():
+                    try:
+                        self._frame_queue.get_nowait()
+                    except:
+                        pass
+
+                self._frame_queue.put((frame, capture_time))
+            else:
+                logger.warning("Failed to capture frame")
+                time.sleep(0.01)
+
+        logger.info("Camera capture thread stopped")
+
+    def _processing_loop(self):
+        """Background thread for frame processing"""
+        logger.info("Frame processing thread started")
+        from queue import Empty
+        while not self._stop_event.is_set():
+            try:
+                frame, capture_time = self._frame_queue.get(timeout=0.5)
+
+                # Process frame
+                t_start = time.time()
+
+                # Determine if we should process this frame (optimization)
+                skip_interval = self._skip_frames_follow if self.mode == CameraMode.FOLLOW else self._skip_frames_scan
+                should_process = (self._frame_count % (skip_interval + 1)) == 0
+
+                self._frame_count += 1
+
+                # Process based on mode (only if not skipping or no cached result)
+                if should_process or self._last_result is None:
+                    if self.mode == CameraMode.FOLLOW:
+                        result = self._process_follow_mode(frame)
+                    else:  # SCAN mode
+                        result = self._process_scan_mode(frame)
+                    self._last_result = result
+                else:
+                    # Use cached result
+                    result = self._last_result
+
+                process_time = (time.time() - t_start) * 1000
+
+                # Drop old results if queue is full
+                if self._result_queue.full():
+                    try:
+                        self._result_queue.get_nowait()
+                    except:
+                        pass
+
+                self._result_queue.put((frame, result, capture_time, process_time))
+
+                # Log timing every 30 frames
+                if self._frame_count % 30 == 0:
+                    logger.debug(f"Capture: {capture_time:.1f}ms, Process: {process_time:.1f}ms")
+
+            except Empty:
+                # Timeout waiting for frame, this is normal during startup/shutdown
+                continue
+            except Exception as e:
+                if not self._stop_event.is_set():
+                    logger.error(f"Error in processing loop: {e}")
+                    import traceback
+                    traceback.print_exc()
+                time.sleep(0.01)
+
+        logger.info("Frame processing thread stopped")
 
     def get_follow_distance_m(self, frame: Optional[np.ndarray] = None) -> Optional[float]:
         """
@@ -117,43 +231,104 @@ class CameraController:
         Returns:
             (annotated_frame, vision_result)
         """
-        ret, frame = self.cap.read()
-        if not ret:
-            return None, VisionResult(
-                mode=self.mode,
-                found=False,
-                label="Camera error",
-                confidence=0.0
-            )
+        if self.threaded:
+            # Get result from processing thread
+            from queue import Empty
+            try:
+                frame, result, capture_time, process_time = self._result_queue.get(timeout=0.5)
 
-        # Determine if we should process this frame (optimization)
-        skip_interval = self._skip_frames_follow if self.mode == CameraMode.FOLLOW else self._skip_frames_scan
-        should_process = (self._frame_count % (skip_interval + 1)) == 0
-        
-        self._frame_count += 1
-        
-        # Process based on mode (only if not skipping or no cached result)
-        if should_process or self._last_result is None:
-            if self.mode == CameraMode.FOLLOW:
-                result = self._process_follow_mode(frame)
-            else:  # SCAN mode
-                result = self._process_scan_mode(frame)
-            self._last_result = result
+                # Annotate frame
+                t_start = time.time()
+                annotated = self._annotate_frame(frame, result)
+                annotate_time = (time.time() - t_start) * 1000
+
+                # Log timing stats every 30 frames
+                if self._frame_count % 30 == 0:
+                    logger.info(
+                        f"[{self.mode.value.upper()}] "
+                        f"Capture: {capture_time:.1f}ms | "
+                        f"Process: {process_time:.1f}ms | "
+                        f"Annotate: {annotate_time:.1f}ms | "
+                        f"Total: {capture_time + process_time + annotate_time:.1f}ms"
+                    )
+
+                return annotated, result
+
+            except Empty:
+                # No frame ready yet, return empty result
+                return None, VisionResult(
+                    mode=self.mode,
+                    found=False,
+                    label="Waiting for frame...",
+                    confidence=0.0
+                )
+            except Exception as e:
+                logger.error(f"Error getting processed frame: {e}")
+                import traceback
+                traceback.print_exc()
+                return None, VisionResult(
+                    mode=self.mode,
+                    found=False,
+                    label="Processing error",
+                    confidence=0.0
+                )
         else:
-            # Use cached result but update mode if changed
-            result = self._last_result
-            if result.mode != self.mode:
-                # Mode changed, force reprocess
+            # Non-threaded mode (original implementation)
+            t_capture_start = time.time()
+            ret, frame = self.cap.read()
+            capture_time = (time.time() - t_capture_start) * 1000
+
+            if not ret:
+                return None, VisionResult(
+                    mode=self.mode,
+                    found=False,
+                    label="Camera error",
+                    confidence=0.0
+                )
+
+            # Determine if we should process this frame (optimization)
+            skip_interval = self._skip_frames_follow if self.mode == CameraMode.FOLLOW else self._skip_frames_scan
+            should_process = (self._frame_count % (skip_interval + 1)) == 0
+
+            self._frame_count += 1
+
+            # Process based on mode
+            t_process_start = time.time()
+            if should_process or self._last_result is None:
                 if self.mode == CameraMode.FOLLOW:
                     result = self._process_follow_mode(frame)
-                else:
+                else:  # SCAN mode
                     result = self._process_scan_mode(frame)
                 self._last_result = result
+            else:
+                # Use cached result but update mode if changed
+                result = self._last_result
+                if result.mode != self.mode:
+                    # Mode changed, force reprocess
+                    if self.mode == CameraMode.FOLLOW:
+                        result = self._process_follow_mode(frame)
+                    else:
+                        result = self._process_scan_mode(frame)
+                    self._last_result = result
 
-        # Always annotate the current frame with latest result
-        annotated = self._annotate_frame(frame, result)
+            process_time = (time.time() - t_process_start) * 1000
 
-        return annotated, result
+            # Annotate the current frame with latest result
+            t_annotate_start = time.time()
+            annotated = self._annotate_frame(frame, result)
+            annotate_time = (time.time() - t_annotate_start) * 1000
+
+            # Log timing stats every 30 frames
+            if self._frame_count % 30 == 0:
+                logger.info(
+                    f"[{self.mode.value.upper()}] "
+                    f"Capture: {capture_time:.1f}ms | "
+                    f"Process: {process_time:.1f}ms | "
+                    f"Annotate: {annotate_time:.1f}ms | "
+                    f"Total: {capture_time + process_time + annotate_time:.1f}ms"
+                )
+
+            return annotated, result
 
     def _process_follow_mode(self, frame: np.ndarray) -> VisionResult:
         """Process frame in FOLLOW mode - ArUco marker tracking"""
@@ -167,11 +342,23 @@ class CameraController:
 
             # Distance estimation (will be 0.0 if not calibrated)
             distance_m = detection.distance if detection.distance is not None else 0.0
-            
+
             # Determine label based on calibration status
             label = f"ArUco Marker #{detection.marker_id}" if detection.marker_id is not None else "ArUco Marker"
-            if self.aruco_tracker.focal_length_px is None:
-                label += " (Uncalibrated)"
+            is_calibrated = self.aruco_tracker.focal_length_px is not None
+
+            if not is_calibrated:
+                label += " (Uncalibrated - Press 'C')"
+            else:
+                label += f" (Calibrated)"
+
+            # Log detection details for debugging
+            if self._frame_count % 30 == 0:
+                logger.info(
+                    f"ArUco Detection: ID={detection.marker_id}, "
+                    f"Distance={distance_m:.2f}m, Offset={offset:+.3f}, "
+                    f"Calibrated={is_calibrated}, Focal={self.aruco_tracker.focal_length_px}"
+                )
 
             return VisionResult(
                 mode=CameraMode.FOLLOW,
@@ -356,6 +543,19 @@ class CameraController:
 
     def release(self):
         """Release camera resources"""
+        # Stop threads if threaded mode is enabled
+        if self.threaded:
+            logger.info("Stopping camera threads...")
+            self._stop_event.set()
+
+            # Wait for threads to finish (with timeout)
+            if self._capture_thread.is_alive():
+                self._capture_thread.join(timeout=2.0)
+            if self._processing_thread.is_alive():
+                self._processing_thread.join(timeout=2.0)
+
+            logger.info("Camera threads stopped")
+
         self.cap.release()
         cv2.destroyAllWindows()
         print("✓ Camera released")

@@ -17,6 +17,7 @@ async def main_async():
     print("=" * 70)
     print()
 
+    robot = None
     try:
         # Initialize robot controller with camera and object detection
         robot = RobotController(camera_id=0, use_yolo=True)
@@ -39,7 +40,8 @@ async def main_async():
         traceback.print_exc()
         sys.exit(1)
     finally:
-        robot.shutdown()
+        if robot is not None:
+            robot.shutdown()
 
 
 if __name__ == "__main__":
