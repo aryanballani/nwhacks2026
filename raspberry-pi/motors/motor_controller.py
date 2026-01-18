@@ -8,6 +8,7 @@ import sys
 # Try to import GPIO, fallback to mock for testing on laptop
 try:
     import RPi.GPIO as GPIO
+    import time
     GPIO_AVAILABLE = True
 except (ImportError, RuntimeError):
     print("⚠ RPi.GPIO not available - using mock mode for testing")
@@ -45,17 +46,16 @@ except (ImportError, RuntimeError):
 
 # L298N Motor Driver Pin Configuration
 # Motor A (Left)
-ENA = 13  # PWM pin for left motor speed
-IN1 = 19  # Direction control 1 for left motor
-IN2 = 26  # Direction control 2 for left motor
+ENA = 12  # PWM pin for left motor speed
+IN1 = 17  # Direction control 1 for left motor
+IN2 = 27  # Direction control 2 for left motor
 
 # Motor B (Right)
-ENB = 18  # PWM pin for right motor speed
-IN3 = 23  # Direction control 1 for right motor
-IN4 = 24  # Direction control 2 for right motor
+ENB = 13  # PWM pin for right motor speed
+IN3 = 22  # Direction control 1 for right motor
+IN4 = 23  # Direction control 2 for right motor
 
 PWM_FREQUENCY = 1000  # 1kHz PWM frequency
-
 
 class MotorController:
     """Controls robot motors via L298N motor driver"""
@@ -112,23 +112,23 @@ class MotorController:
 
         # Left motor
         if left_speed >= 0:
+            self.pwm_left.ChangeDutyCycle(abs(left_speed))
             GPIO.output(IN1, GPIO.HIGH)
             GPIO.output(IN2, GPIO.LOW)
-            self.pwm_left.ChangeDutyCycle(abs(left_speed))
         else:
+            self.pwm_left.ChangeDutyCycle(abs(left_speed))
             GPIO.output(IN1, GPIO.LOW)
             GPIO.output(IN2, GPIO.HIGH)
-            self.pwm_left.ChangeDutyCycle(abs(left_speed))
 
         # Right motor
         if right_speed >= 0:
+            self.pwm_right.ChangeDutyCycle(abs(right_speed))
             GPIO.output(IN3, GPIO.HIGH)
             GPIO.output(IN4, GPIO.LOW)
-            self.pwm_right.ChangeDutyCycle(abs(right_speed))
         else:
+            self.pwm_right.ChangeDutyCycle(abs(right_speed))
             GPIO.output(IN3, GPIO.LOW)
             GPIO.output(IN4, GPIO.HIGH)
-            self.pwm_right.ChangeDutyCycle(abs(right_speed))
 
     def forward(self, speed: float = 100):
         """Move forward at specified speed"""
