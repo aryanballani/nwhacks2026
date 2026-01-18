@@ -138,13 +138,13 @@ class MotorController:
         """Move backward at specified speed"""
         self.set_motors(-speed, -speed)
 
-    def turn_left(self, speed: float = 70):
-        """Turn left in place"""
-        self.set_motors(-speed, speed)
-
-    def turn_right(self, speed: float = 70):
+    def turn_right(self, speed_fast: float = 70, speed_slow: float = 30):
         """Turn right in place"""
-        self.set_motors(speed, -speed)
+        self.set_motors(speed_fast, speed_slow)
+
+    def turn_left(self, speed_fast: float = 70, speed_slow: float = 30):
+        """Turn left in place"""
+        self.set_motors(speed_slow, speed_fast)
 
     def stop(self):
         """Stop all motors"""

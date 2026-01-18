@@ -313,7 +313,9 @@ class RobotController:
 
 
 def main():
-    """Main entry point"""
+    """
+    Main entry point
+    """
     import argparse
 
     parser = argparse.ArgumentParser(description="Grocery Buddy Robot Controller")
@@ -354,7 +356,7 @@ def main():
         import traceback
         traceback.print_exc()
         sys.exit(1)
-
+    
 
 if __name__ == "__main__":
     main()
