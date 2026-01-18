@@ -9,7 +9,7 @@ from enum import Enum
 from typing import Optional, Tuple, Union
 from dataclasses import dataclass
 
-from .person_tracker import PersonTracker, PersonDetection
+from .aruco_tracker import ArucoTracker, ArucoDetection
 from .object_detector import ObjectDetector, ObjectDetection
 from .config import CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FPS
 
@@ -31,7 +31,7 @@ class VisionResult:
     bbox: Optional[Tuple[int, int, int, int]] = None
     distance: float = 0.0
     tracking_offset: float = 0.0  # -1 (left) to 1 (right) for robot steering
-    raw_detection: Union[PersonDetection, ObjectDetection, None] = None
+    raw_detection: Union[ArucoDetection, ObjectDetection, None] = None
 
 
 class CameraController:
@@ -61,7 +61,7 @@ class CameraController:
             raise RuntimeError(f"Failed to open camera {camera_id}")
 
         # Initialize vision modules
-        self.person_tracker = PersonTracker()
+        self.aruco_tracker = ArucoTracker()
         self.object_detector = ObjectDetector(use_yolo=use_yolo)
 
         print(f"✓ CameraController initialized (Camera ID: {camera_id}, Mode: {self.mode.value})")
@@ -86,7 +86,23 @@ class CameraController:
             if not ret:
                 return False
 
-        return self.person_tracker.calibrate(frame)
+        return self.aruco_tracker.calibrate(frame)
+
+    def get_follow_distance_m(self, frame: Optional[np.ndarray] = None) -> Optional[float]:
+        """
+        Get estimated distance (meters) to the ArUco marker.
+        Returns None if no marker is detected or calibration is missing.
+        """
+        if frame is None:
+            ret, frame = self.cap.read()
+            if not ret:
+                return None
+
+        detection = self.aruco_tracker.detect(frame)
+        if not detection.found:
+            return None
+
+        return detection.distance
 
     def process_frame(self) -> Tuple[Optional[np.ndarray], VisionResult]:
         """
@@ -117,23 +133,24 @@ class CameraController:
 
     def _process_follow_mode(self, frame: np.ndarray) -> VisionResult:
         """Process frame in FOLLOW mode"""
-        detection = self.person_tracker.detect(frame)
+        detection = self.aruco_tracker.detect(frame)
 
         if detection.found:
             # Calculate steering offset
-            offset = self.person_tracker.get_tracking_offset(
-                detection,
-                CAMERA_WIDTH
-            )
+            offset = 0.0
+            if detection.center:
+                offset = (detection.center[0] - CAMERA_WIDTH / 2) / (CAMERA_WIDTH / 2)
+
+            distance_m = detection.distance if detection.distance is not None else 0.0
 
             return VisionResult(
                 mode=CameraMode.FOLLOW,
                 found=True,
-                label="Person (marker)",
+                label="Aruco Marker",
                 confidence=detection.confidence,
                 center=detection.center,
                 bbox=detection.bbox,
-                distance=detection.distance,
+                distance=distance_m,
                 tracking_offset=offset,
                 raw_detection=detection
             )
@@ -194,8 +211,9 @@ class CameraController:
 
         # Calibration status (FOLLOW mode only)
         if result.mode == CameraMode.FOLLOW:
-            calib_text = "CALIBRATED" if self.person_tracker.calibrated else "PRESS 'C' TO CALIBRATE"
-            calib_color = (0, 255, 0) if self.person_tracker.calibrated else (0, 0, 255)
+            calibrated = self.aruco_tracker.focal_length_px is not None
+            calib_text = "CALIBRATED" if calibrated else "PRESS 'C' TO CALIBRATE"
+            calib_color = (0, 255, 0) if calibrated else (0, 0, 255)
             cv2.putText(
                 annotated,
                 calib_text,
@@ -249,6 +267,8 @@ class CameraController:
 
             # Distance
             dist_text = f"Dist: {result.distance:.1f}m"
+            if isinstance(result.raw_detection, ArucoDetection) and result.raw_detection.distance is None:
+                dist_text = "Dist: --"
             cv2.putText(
                 annotated,
                 dist_text,

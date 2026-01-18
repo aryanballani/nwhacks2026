@@ -26,8 +26,56 @@ class Tracker:
 
         self.marker_length_cm = float(marker_length_cm)
         self.focal_length = None  # will be set by calibrate()
-        self.aruco_dict = cv2.aruco.Dictionary_get(aruco_dict_id)
-        self.aruco_params = cv2.aruco.DetectorParameters_create()
+        # Create aruco dictionary with compatibility across cv2 versions
+        try:
+            # newer OpenCV
+            self.aruco_dict = cv2.aruco.getPredefinedDictionary(aruco_dict_id)
+        except AttributeError:
+            try:
+                # older OpenCV
+                self.aruco_dict = cv2.aruco.Dictionary_get(aruco_dict_id)
+            except AttributeError:
+                # as a last resort, try constructing Dictionary
+                self.aruco_dict = getattr(cv2.aruco, 'Dictionary', None)
+
+        # Detector parameters (compatibility)
+        try:
+            self.aruco_params = cv2.aruco.DetectorParameters_create()
+        except AttributeError:
+            # fallback name
+            try:
+                self.aruco_params = cv2.aruco.DetectorParameters()
+            except Exception:
+                self.aruco_params = None
+
+    def _detect_markers(self, gray):
+        """Detect markers in a grayscale image with compatibility for
+        cv2.aruco API differences. Returns (corners, ids) or (None, None).
+        """
+        try:
+            # Prefer ArucoDetector when available (new API)
+            if hasattr(cv2.aruco, 'ArucoDetector') and self.aruco_params is not None:
+                detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
+                res = detector.detectMarkers(gray)
+                # res may be (corners, ids, rejected)
+                if isinstance(res, tuple) and len(res) >= 2:
+                    corners, ids = res[0], res[1]
+                else:
+                    return None, None
+            else:
+                # older API: detectMarkers(image, dictionary, parameters=...)
+                if self.aruco_params is not None:
+                    corners, ids, _ = cv2.aruco.detectMarkers(gray, self.aruco_dict, parameters=self.aruco_params)
+                else:
+                    corners, ids, _ = cv2.aruco.detectMarkers(gray, self.aruco_dict)
+        except Exception:
+            # final fallback
+            try:
+                corners, ids, _ = cv2.aruco.detectMarkers(gray, self.aruco_dict)
+            except Exception:
+                return None, None
+
+        return corners, ids
 
     def calibrate(self, known_distance_cm=30.0, samples=15, timeout=10.0):
         """Calibrate focal length:
@@ -43,7 +91,7 @@ class Tracker:
             if not ret:
                 continue
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            corners, ids, _ = cv2.aruco.detectMarkers(gray, self.aruco_dict, parameters=self.aruco_params)
+            corners, ids = self._detect_markers(gray)
             if ids is None:
                 continue
             # take first detected marker
@@ -73,7 +121,7 @@ class Tracker:
         if not ret:
             return False, None, None, None
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        corners, ids, _ = cv2.aruco.detectMarkers(gray, self.aruco_dict, parameters=self.aruco_params)
+        corners, ids = self._detect_markers(gray)
         if ids is None:
             if draw:
                 cv2.putText(frame, "No marker", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
@@ -117,3 +165,66 @@ class Tracker:
         """Release camera resources."""
         if self.cap and self.cap.isOpened():
             self.cap.release()
+
+
+def main():
+    """Simple interactive runner for the Tracker.
+
+    Controls:
+      - c : calibrate (you'll be prompted for known distance in cm)
+      - p : print current focal length
+      - q : quit
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run ArUco tracker for calibration and distance estimation")
+    parser.add_argument("--camera", type=int, default=0, help="Camera device id")
+    parser.add_argument("--marker-cm", type=float, default=5.0, help="Real marker width in cm")
+    parser.add_argument("--width", type=int, default=640, help="Frame width")
+    parser.add_argument("--height", type=int, default=480, help="Frame height")
+    args = parser.parse_args()
+
+    tracker = Tracker(camera_id=args.camera, marker_length_cm=args.marker_cm, width=args.width, height=args.height)
+
+    print("Tracker started. Press 'c' to calibrate, 'p' to print focal length, 'q' to quit.")
+    window_name = "Tracker"
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+
+    try:
+        while True:
+            found, x_off, dist, frame = tracker.track(draw=True)
+            if frame is None:
+                print("No frame received from camera. Exiting loop.")
+                break
+
+            cv2.imshow(window_name, frame)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                break
+            elif key == ord('c'):
+                # prompt for known distance in cm
+                try:
+                    val = input("Enter known distance to marker in cm (e.g. 30): ")
+                    known = float(val)
+                except Exception:
+                    print("Invalid distance; calibration aborted.")
+                    continue
+                print(f"Calibrating at {known} cm — hold the marker steady facing the camera...")
+                fl = tracker.calibrate(known_distance_cm=known, samples=20, timeout=12.0)
+                if fl:
+                    print(f"Calibration complete. Focal length = {fl:.2f} px")
+                else:
+                    print("Calibration failed: marker not detected or timed out.")
+            elif key == ord('p'):
+                print(f"Focal length: {tracker.focal_length}")
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        tracker.release()
+        cv2.destroyAllWindows()
+        print("Tracker stopped. Goodbye.")
+
+
+if __name__ == '__main__':
+    main()

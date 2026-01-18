@@ -16,14 +16,14 @@ def main():
     print("=" * 70)
     print("\n🎮 CONTROLS:")
     print("  M     - Toggle mode (FOLLOW ↔ SCAN)")
-    print("  C     - Calibrate person marker (FOLLOW mode only)")
+    print("  C     - Calibrate ArUco marker distance (FOLLOW mode only)")
     print("  Q/ESC - Quit")
     print("  SPACE - Take screenshot")
     print("\n📹 MODES:")
-    print("  FOLLOW - Track person with colored marker (pink/magenta/green)")
+    print("  FOLLOW - Track ArUco marker (printed QR-style fiducial)")
     print("  SCAN   - Detect grocery items (banana, apple, orange, etc.)")
     print("\n💡 TIPS:")
-    print("  - For FOLLOW mode: Hold pink/magenta object in center, press 'C'")
+    print("  - For FOLLOW mode: Hold ArUco marker in center, press 'C'")
     print("  - For SCAN mode: Show banana/apple/orange to camera")
     print("  - YOLO will be used if installed (pip install ultralytics)")
     print("=" * 70)
@@ -60,10 +60,15 @@ def main():
                 # Print detection info
                 if result.found:
                     print(f"\r{'  ' * 10}", end='')  # Clear line
+                    dist_text = f"{result.distance:.1f}m"
+                    if result.mode == CameraMode.FOLLOW and result.raw_detection is not None:
+                        distance = getattr(result.raw_detection, "distance", None)
+                        if distance is None:
+                            dist_text = "--"
                     print(
                         f"\r✓ {result.label} | "
                         f"Conf: {result.confidence*100:.0f}% | "
-                        f"Dist: {result.distance:.1f}m | "
+                        f"Dist: {dist_text} | "
                         f"Offset: {result.tracking_offset:+.2f} | "
                         f"FPS: {fps:.1f}",
                         end=''
@@ -78,17 +83,27 @@ def main():
             # Handle keyboard input
             key = cv2.waitKey(1) & 0xFF
 
-            if key == ord('q') or key == 27:  # Q or ESC
+            # Normalize key to a lowercase character when possible so both
+            # uppercase and lowercase inputs work (e.g. 'M' and 'm').
+            k = None
+            if key != 255:
+                try:
+                    k = chr(key).lower()
+                except Exception:
+                    k = None
+
+            # Quit: 'q' or ESC
+            if key == 27 or k == 'q':
                 break
 
-            elif key == ord('m'):
-                # Toggle mode
+            # Toggle mode: 'm' (case-insensitive)
+            elif k == 'm':
                 new_mode = CameraMode.SCAN if camera.mode == CameraMode.FOLLOW else CameraMode.FOLLOW
                 camera.set_mode(new_mode)
                 print(f"\n\n🔄 Mode switched to: {new_mode.value.upper()}\n")
 
-            elif key == ord('c'):
-                # Calibrate (FOLLOW mode only)
+            # Calibrate: 'c' (case-insensitive)
+            elif k == 'c':
                 if camera.mode == CameraMode.FOLLOW:
                     print("\n\n📸 Calibrating... Hold marker in center of frame...")
                     success = camera.calibrate_person_marker(frame)
@@ -99,8 +114,8 @@ def main():
                 else:
                     print("\n\n⚠️  Calibration only works in FOLLOW mode (press 'M' to switch)\n")
 
+            # Screenshot: spacebar
             elif key == ord(' '):
-                # Screenshot
                 timestamp = int(time.time())
                 filename = f"vision_screenshot_{timestamp}.jpg"
                 cv2.imwrite(filename, frame)

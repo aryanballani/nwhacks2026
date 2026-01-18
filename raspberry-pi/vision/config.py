@@ -10,6 +10,10 @@ CAMERA_WIDTH = 640
 CAMERA_HEIGHT = 480
 CAMERA_FPS = 30
 
+# ArUco Tracking
+ARUCO_MARKER_LENGTH_CM = 5.0
+ARUCO_CALIBRATION_DISTANCE_CM = 30.0
+
 # Person Tracking - Color-based detection
 PERSON_MARKER_COLORS = {
     "pink_magenta": {
