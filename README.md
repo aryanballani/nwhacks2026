@@ -2,6 +2,9 @@
 
 **GlideCart** is an autonomous, AI-powered shopping companion designed to remove physical barriers in retail. Built in just 12 hours, this prototype provides a hands-free, intelligent shopping experience for people with mobility challenges or accessibility needs.
 
+### Video Demo:
+https://youtube.com/shorts/Cf38NwVQo1U
+
 ## 🚀 The Vision
 
 For wheelchair users or the elderly, navigating a store while pushing a heavy cart is a significant physical hurdle. **GlideCart** solves this by using vision-based tracking to follow the user and integrated computer vision to automate the checkout process.
