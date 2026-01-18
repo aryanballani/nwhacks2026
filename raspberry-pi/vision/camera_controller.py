@@ -279,6 +279,21 @@ class CameraController:
                 1
             )
 
+            # Locked marker center (FOLLOW mode only)
+            if result.mode == CameraMode.FOLLOW:
+                locked_center = self.aruco_tracker.get_locked_center(frame, normalized=True)
+                if locked_center is not None:
+                    coord_text = f"X: {locked_center[0]:+.2f} Y: {locked_center[1]:+.2f}"
+                    cv2.putText(
+                        annotated,
+                        coord_text,
+                        (x, y + bh + 45),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5,
+                        (255, 255, 255),
+                        1
+                    )
+
             # Offset indicator (for robot steering)
             offset_x = int(w/2 + result.tracking_offset * w/2)
             cv2.arrowedLine(

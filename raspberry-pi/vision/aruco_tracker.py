@@ -104,6 +104,30 @@ class ArucoTracker:
         distance_cm = (self.marker_length_cm * self.focal_length_px) / float(pixel_width_px)
         return distance_cm / 100.0
 
+    def get_locked_center(self, frame: np.ndarray, normalized: bool = False) -> Optional[Tuple[float, float]]:
+        """
+        Return the marker center coordinates when calibrated ("locked").
+        If normalized=True, returns (-1..1) offsets from frame center.
+        """
+        if self.focal_length_px is None:
+            return None
+
+        detection = self.detect(frame)
+        if not detection.found or detection.center is None:
+            return None
+
+        cx, cy = detection.center
+        if not normalized:
+            return float(cx), float(cy)
+
+        h, w = frame.shape[:2]
+        if w == 0 or h == 0:
+            return None
+
+        x_norm = (cx - w / 2) / (w / 2)
+        y_norm = (cy - h / 2) / (h / 2)
+        return float(x_norm), float(y_norm)
+
     def detect(self, frame: np.ndarray) -> ArucoDetection:
         """Detect the first ArUco marker in frame."""
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)

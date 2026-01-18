@@ -65,11 +65,16 @@ def main():
                         distance = getattr(result.raw_detection, "distance", None)
                         if distance is None:
                             dist_text = "--"
+                    coord_text = ""
+                    if result.mode == CameraMode.FOLLOW:
+                        locked_center = camera.aruco_tracker.get_locked_center(frame, normalized=True)
+                        if locked_center is not None:
+                            coord_text = f" | X: {locked_center[0]:+.2f} Y: {locked_center[1]:+.2f}"
                     print(
                         f"\r✓ {result.label} | "
                         f"Conf: {result.confidence*100:.0f}% | "
                         f"Dist: {dist_text} | "
-                        f"Offset: {result.tracking_offset:+.2f} | "
+                        f"Offset: {result.tracking_offset:+.2f}{coord_text} | "
                         f"FPS: {fps:.1f}",
                         end=''
                     )
