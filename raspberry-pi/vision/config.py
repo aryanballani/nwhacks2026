@@ -65,20 +65,35 @@ GROCERY_ITEM_COLORS = {
     }
 }
 
+# Object detection model selection
+# Options: "fruits_onnx", "sku110_onnx", "grocery_onnx", "yolov8n_pt"
+OBJECT_DETECTION_MODEL = "grocery_onnx"
+
 # YOLO Configuration (Ultralytics .pt)
 YOLO_MODEL = "models/yolov8n.pt"  # Nano model for speed
 YOLO_CONFIDENCE_THRESHOLD = 0.5
 YOLO_IOU_THRESHOLD = 0.45
 
 # ONNX Configuration (Ultralytics export)
-ONNX_MODEL = "models/best.onnx"
-ONNX_INPUT_SIZE = 416
 ONNX_CONFIDENCE_THRESHOLD = 0.4
 ONNX_IOU_THRESHOLD = 0.45
-
-# Class names for ONNX custom model (index-aligned)
-# Example: ["banana", "apple", "orange"]
-ONNX_CLASS_NAMES = []
+ONNX_MODELS = {
+    "fruits_onnx": {
+        "path": "models/best.onnx",
+        "input_size": 416,
+        "class_names": ["apple", "banana", "orange"]
+    },
+    "sku110_onnx": {
+        "path": "models/sku110_fine_tuned.onnx",
+        "input_size": 640,
+        "class_names": ["object"],
+    },
+    "grocery_onnx": {
+        "path": "models/best_grocery.onnx",
+        "input_size": 416,
+        "class_names": ["milk", "apple", "banana", "carrot", "orange"],
+    },
+}
 
 # Grocery categories from YOLO COCO dataset
 GROCERY_CLASSES = {

@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Optional, List, Tuple
 from dataclasses import dataclass
 from .config import (
+    OBJECT_DETECTION_MODEL,
     YOLO_MODEL, YOLO_CONFIDENCE_THRESHOLD, YOLO_IOU_THRESHOLD,
-    ONNX_MODEL, ONNX_INPUT_SIZE, ONNX_CONFIDENCE_THRESHOLD, ONNX_IOU_THRESHOLD,
-    ONNX_CLASS_NAMES,
+    ONNX_CONFIDENCE_THRESHOLD, ONNX_IOU_THRESHOLD, ONNX_MODELS,
     GROCERY_CLASSES, GROCERY_ITEM_COLORS, MIN_OBJECT_AREA,
     estimate_distance
 )
@@ -43,21 +43,45 @@ class ObjectDetector:
         self.ort_session = None
         self.ort_input_name = None
         self.ort_output_names = None
-        self.onnx_input_size = (ONNX_INPUT_SIZE, ONNX_INPUT_SIZE)  # (h, w)
+        self.onnx_input_size = (416, 416)  # (h, w) default if not specified
         self.model = None
-
-        self._onnx_class_names = ONNX_CLASS_NAMES if ONNX_CLASS_NAMES else None
+        self.model_choice = OBJECT_DETECTION_MODEL
+        self._onnx_class_names = None
 
         if use_yolo:
-            try:
-                self._load_onnx()
-            except ImportError:
-                pass
-            except Exception as e:
-                print(f"⚠ ONNX loading failed: {e}")
-                print("  Using YOLO/color detection fallback")
+            if self.model_choice in ONNX_MODELS:
+                onnx_cfg = ONNX_MODELS[self.model_choice]
+                self.onnx_input_size = (onnx_cfg["input_size"], onnx_cfg["input_size"])
+                class_names = onnx_cfg.get("class_names", [])
+                self._onnx_class_names = class_names if class_names else None
+                print(
+                    f"ℹ ONNX selected: {self.model_choice} | "
+                    f"path={onnx_cfg['path']} | "
+                    f"input={self.onnx_input_size[0]} | "
+                    f"classes={len(class_names)}"
+                )
+                try:
+                    self._load_onnx(onnx_cfg["path"])
+                except ImportError:
+                    print("⚠ onnxruntime not installed, skipping ONNX load")
+                    pass
+                except Exception as e:
+                    print(f"⚠ ONNX loading failed: {e}")
+                    print("  Using YOLO/color detection fallback")
+            else:
+                try:
+                    from ultralytics import YOLO
+                    self.model = YOLO(YOLO_MODEL)
+                    self.yolo_available = True
+                    print(f"✓ YOLO model loaded: {YOLO_MODEL}")
+                except ImportError:
+                    print("⚠ ultralytics not installed, using color detection fallback")
+                    print("  Install: pip install ultralytics")
+                except Exception as e:
+                    print(f"⚠ YOLO loading failed: {e}")
+                    print("  Using color detection fallback")
 
-        if use_yolo and not self.onnx_available:
+        if use_yolo and not self.onnx_available and not self.yolo_available:
             try:
                 from ultralytics import YOLO
                 self.model = YOLO(YOLO_MODEL)
@@ -73,10 +97,11 @@ class ObjectDetector:
         if not self.onnx_available and not self.yolo_available:
             print("✓ ObjectDetector initialized (color-based mode)")
 
-    def _load_onnx(self) -> None:
+    def _load_onnx(self, model_rel_path: str) -> None:
         base_dir = Path(__file__).resolve().parents[1]
-        model_path = base_dir / ONNX_MODEL
+        model_path = base_dir / model_rel_path
         if not model_path.exists():
+            print(f"⚠ ONNX model not found at: {model_path}")
             return
 
         import onnxruntime as ort
